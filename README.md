@@ -1,8 +1,12 @@
-# ⚔️ Magic Arena — 2D Top-Down Multiplayer PvP
+# Magic Arena
 
-A browser-based magic PvP arena built with **Phaser 3** + **Colyseus**.
+A 2D top-down multiplayer wizard PvP game that runs entirely in the browser. Pick one of five spell classes, create a room, share the four letter code with friends, and fight until someone reaches 10 kills.
 
-## Quick Start
+Built with Phaser 3 on the client and Node.js with Socket.IO on the server. The server owns the whole simulation, so there is no client side cheating: clients only send input and render what the server tells them.
+
+![Gameplay](docs/gameplay.png)
+
+## Quick start
 
 ```bash
 cd server
@@ -10,52 +14,78 @@ npm install
 npm start
 ```
 
-Then open **two browser tabs** to `http://localhost:3000` and start fighting!
+Open http://localhost:3000 in two browser tabs (or send the room code to a friend on your network) and start fighting.
+
+## How a match works
+
+1. One player clicks CREATE ROOM and gets a four letter code.
+2. Up to 8 players join with that code and pick a class in the lobby.
+3. Anyone presses START GAME. The server picks one of three arenas at random.
+4. First player to 10 kills wins. A scoreboard appears with a rematch button.
+5. Rematch starts a fresh match, new random map, scores reset.
+
+![Menu](docs/menu.png)
+
+![Lobby](docs/lobby_two_players.png)
 
 ## Controls
 
-| Key         | Action                  |
-|-------------|-------------------------|
-| W/A/S/D     | Move                    |
-| Mouse       | Aim                     |
-| Left Click  | Shoot firebolt          |
-| Space       | Dash (1.5s cooldown)    |
+| Input       | Action                          |
+|-------------|---------------------------------|
+| W/A/S/D     | Move                            |
+| Mouse       | Aim                             |
+| Left click  | Basic attack (hold to auto fire)|
+| Right click | Special ability                 |
+| Space       | Dash                            |
+| Shift       | Sprint                          |
 
-## Project Structure
+## Classes
+
+| Class       | Basic attack      | Special ability                                  |
+|-------------|-------------------|--------------------------------------------------|
+| Pyromancer  | Fireball          | Inferno Wave: cone of fire that burns over time  |
+| Frostweaver | Ice Shard (slows) | Glacial Wall: temporary wall that blocks movement|
+| Stormcaller | Chain Bolt        | Thunder Strike: delayed AoE blast at range       |
+| Hexblade    | Melee slash       | Shadow Bind: projectile that roots the target    |
+| Alchemist   | Acid Flask        | Transmute Field: zone that heals you, then hurts enemies |
+
+You can switch class while waiting to respawn, so counterpicking mid match is part of the game.
+
+Other mechanics: killing someone heals you 25 HP, everyone slowly regenerates, fresh spawns get 2 seconds of protection, and every hit applies knockback.
+
+![Match over](docs/match_over.png)
+
+## Project structure
 
 ```
 magic-arena/
 ├── server/
-│   ├── index.js     ← Colyseus server + Express static file server
-│   ├── room.js      ← All game logic: physics, combat, map, collisions
+│   ├── index.js     Express static server + Socket.IO + all game logic
 │   └── package.json
 └── client/
-    ├── index.html   ← Loads Phaser + Colyseus from CDN
-    ├── main.js      ← Phaser config
-    └── scene.js     ← Rendering, input, server sync
+    ├── index.html   Entry point
+    ├── main.js      Phaser config
+    ├── menu.js      Menu and lobby scene
+    ├── scene.js     Game scene: rendering, input, interpolation
+    └── sprites.js   Pixel art sprites generated at runtime (no image assets)
 ```
 
-## Architecture
+## Architecture notes
 
-- **Server-authoritative**: The server runs the game loop at 60fps, handles all collision/damage
-- **Client is a dumb terminal**: Sends input (WASD + mouse angle), renders whatever the server says
-- **No prediction/interpolation**: Kept simple on purpose for MVP
+- **Server authoritative.** The server runs each room's simulation at 60 fps and handles movement, collision, damage, status effects, and win detection. Clients send `{dx, dy, angle, sprint}` input and ability requests, nothing else.
+- **Client interpolation.** Remote players lerp toward their latest server position so movement looks smooth even though state arrives in discrete ticks.
+- **Runtime generated art.** All sprites are drawn to canvases at startup in `sprites.js`. The repo has no image files and no build step.
+- **Rooms are isolated.** Each room has its own game loop, map, and state. Empty rooms are cleaned up when the last player disconnects.
 
-## Game Settings (edit in `server/room.js`)
+## Tuning
 
-| Setting            | Value   |
-|--------------------|---------|
-| Player speed       | 200 px/s |
-| Dash speed         | 600 px/s |
-| Dash cooldown      | 1.5s    |
-| Projectile speed   | 500 px/s |
-| Projectile damage  | 20 HP   |
-| Shoot cooldown     | 300ms   |
-| Player HP          | 100     |
-| Respawn time       | 2s      |
+Game balance lives in two places in `server/index.js`:
 
-## Map
+- `CLASSES` defines every class stat: move speed, dash, cooldowns, damage.
+- The constants above it (`KILL_LIMIT`, `RESPAWN_TIME`, `SIPHON_HEAL`, `PASSIVE_REGEN`, and so on) control match rules.
 
-Edit the `MAP` array in `room.js` to change the arena layout:
-- `#` = wall (collidable)
-- `.` = floor
+Maps are plain string arrays in the `MAPS` object. `#` is a wall, `.` is floor, each cell is 64 pixels. Add a new layout there and it joins the random rotation automatically.
+
+## License
+
+MIT

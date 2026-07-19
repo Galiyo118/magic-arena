@@ -182,7 +182,9 @@ class MenuScene extends Phaser.Scene {
       this.scene.start("GameScene", {
         socket: this.socket,
         map: data.map,
+        mapName: data.mapName,
         tileSize: data.tileSize,
+        killLimit: data.killLimit,
         myId: data.myId,
         players: data.players,
         className: this.selectedClass,

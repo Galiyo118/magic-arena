@@ -17,23 +17,56 @@ app.use(express.static(path.join(__dirname, "..", "client"), { maxAge: "1h" }));
 
 // ─── GAME CONSTANTS ────────────────────────────────────────────
 const TILE_SIZE = 64;
-const MAP = [
-  "##################",
-  "#................#",
-  "#..##......##....#",
-  "#..##............#",
-  "#............##..#",
-  "#......##....##..#",
-  "#................#",
-  "#....##..........#",
-  "#............##..#",
-  "#..##............#",
-  "#........##......#",
-  "#................#",
-  "##################",
-];
-const MAP_ROWS = MAP.length;
-const MAP_COLS = MAP[0].length;
+
+// Three arena layouts. One is picked at random when a match starts.
+const MAPS = {
+  courtyard: [
+    "##################",
+    "#................#",
+    "#..##......##....#",
+    "#..##............#",
+    "#............##..#",
+    "#......##....##..#",
+    "#................#",
+    "#....##..........#",
+    "#............##..#",
+    "#..##............#",
+    "#........##......#",
+    "#................#",
+    "##################",
+  ],
+  crossfire: [
+    "##################",
+    "#........#.......#",
+    "#..##....#....##.#",
+    "#........#.......#",
+    "#...#.........#..#",
+    "####...........###",
+    "#................#",
+    "####...........###",
+    "#...#.........#..#",
+    "#........#.......#",
+    "#..##....#....##.#",
+    "#........#.......#",
+    "##################",
+  ],
+  pillars: [
+    "##################",
+    "#................#",
+    "#.....#....#.....#",
+    "#..#..........#..#",
+    "#................#",
+    "#....#......#....#",
+    "#................#",
+    "#....#......#....#",
+    "#................#",
+    "#..#..........#..#",
+    "#.....#....#.....#",
+    "#................#",
+    "##################",
+  ],
+};
+const MAP_NAMES = Object.keys(MAPS);
 
 const PLAYER_RADIUS = 14;
 const PLAYER_MAX_HP = 100;
@@ -44,6 +77,7 @@ const SIPHON_HEAL = 25;
 const PASSIVE_REGEN = 2; // HP per second
 const KNOCKBACK_FORCE = 120;
 const SPRINT_MULTIPLIER = 1.55;
+const KILL_LIMIT = 10; // first player to reach this wins the match
 
 // ─── CLASS DEFINITIONS (server-side) ───────────────────────────
 // Fast, punchy stats — short cooldowns, fast projectiles, snappy dashes
@@ -76,14 +110,15 @@ const CLASSES = {
 };
 
 // ─── HELPERS ──────────────────────────────────────────────────
-function collidesWithWall(cx, cy, radius, walls) {
+function collidesWithWall(map, cx, cy, radius, walls) {
+  const rows = map.length, cols = map[0].length;
   const minCol = Math.max(0, Math.floor((cx - radius) / TILE_SIZE));
-  const maxCol = Math.min(MAP_COLS - 1, Math.floor((cx + radius) / TILE_SIZE));
+  const maxCol = Math.min(cols - 1, Math.floor((cx + radius) / TILE_SIZE));
   const minRow = Math.max(0, Math.floor((cy - radius) / TILE_SIZE));
-  const maxRow = Math.min(MAP_ROWS - 1, Math.floor((cy + radius) / TILE_SIZE));
+  const maxRow = Math.min(rows - 1, Math.floor((cy + radius) / TILE_SIZE));
   for (let row = minRow; row <= maxRow; row++) {
     for (let col = minCol; col <= maxCol; col++) {
-      if (MAP[row][col] === "#") {
+      if (map[row][col] === "#") {
         const rx = col * TILE_SIZE, ry = row * TILE_SIZE;
         const clx = Math.max(rx, Math.min(cx, rx + TILE_SIZE));
         const cly = Math.max(ry, Math.min(cy, ry + TILE_SIZE));
@@ -104,11 +139,11 @@ function collidesWithWall(cx, cy, radius, walls) {
   return false;
 }
 
-function getSpawnPoint() {
+function getSpawnPoint(map) {
   const floors = [];
-  for (let r = 0; r < MAP_ROWS; r++)
-    for (let c = 0; c < MAP_COLS; c++)
-      if (MAP[r][c] === ".") floors.push({ x: c * TILE_SIZE + TILE_SIZE / 2, y: r * TILE_SIZE + TILE_SIZE / 2 });
+  for (let r = 0; r < map.length; r++)
+    for (let c = 0; c < map[0].length; c++)
+      if (map[r][c] === ".") floors.push({ x: c * TILE_SIZE + TILE_SIZE / 2, y: r * TILE_SIZE + TILE_SIZE / 2 });
   return floors[Math.floor(Math.random() * floors.length)];
 }
 
@@ -137,8 +172,11 @@ function createRoom(code) {
     projCounter: 0,
     effectCounter: 0,
     started: false,
+    gameOver: false,
     interval: null,
     colorIdx: 0,
+    mapName: null,
+    map: null,
   };
   return rooms[code];
 }
@@ -146,13 +184,26 @@ function createRoom(code) {
 function startGame(room) {
   if (room.started) return;
   room.started = true;
+  room.gameOver = false;
+
+  // Pick a random map for this match
+  room.mapName = MAP_NAMES[Math.floor(Math.random() * MAP_NAMES.length)];
+  room.map = MAPS[room.mapName];
+
+  // Reset arena state
+  room.projectiles = {};
+  room.effects = [];
+  room.iceWalls = [];
+  room.puddles = [];
 
   // Spawn all players
   for (const p of Object.values(room.players)) {
-    const spawn = getSpawnPoint();
+    const spawn = getSpawnPoint(room.map);
     p.x = spawn.x; p.y = spawn.y;
     p.hp = PLAYER_MAX_HP; p.alive = true;
     p.kills = 0; p.deaths = 0;
+    p.burning = false; p.rooted = false;
+    p.kbVx = 0; p.kbVy = 0;
   }
 
   // Broadcast game start (send only serializable player data)
@@ -166,7 +217,7 @@ function startGame(room) {
   }
   for (const p of Object.values(room.players)) {
     const sock = io.sockets.sockets.get(p.socketId);
-    if (sock) sock.emit("gameStart", { map: MAP, tileSize: TILE_SIZE, myId: p.id, players: playerData });
+    if (sock) sock.emit("gameStart", { map: room.map, mapName: room.mapName, tileSize: TILE_SIZE, killLimit: KILL_LIMIT, myId: p.id, players: playerData });
   }
 
   // Game loop at 60fps
@@ -259,8 +310,8 @@ function updateRoom(room) {
       const decay = 0.85;
       const nx = p.x + p.kbVx * dt;
       const ny = p.y + p.kbVy * dt;
-      if (!collidesWithWall(nx, p.y, PLAYER_RADIUS, room.iceWalls)) p.x = nx;
-      if (!collidesWithWall(p.x, ny, PLAYER_RADIUS, room.iceWalls)) p.y = ny;
+      if (!collidesWithWall(room.map, nx, p.y, PLAYER_RADIUS, room.iceWalls)) p.x = nx;
+      if (!collidesWithWall(room.map, p.x, ny, PLAYER_RADIUS, room.iceWalls)) p.y = ny;
       p.kbVx *= decay;
       p.kbVy *= decay;
       if (Math.abs(p.kbVx) < 5) p.kbVx = 0;
@@ -283,8 +334,8 @@ function updateRoom(room) {
       if (sprinting) speed *= SPRINT_MULTIPLIER;
       const nx = p.x + dx * speed * dt;
       const ny = p.y + dy * speed * dt;
-      if (!collidesWithWall(nx, p.y, PLAYER_RADIUS, room.iceWalls)) p.x = nx;
-      if (!collidesWithWall(p.x, ny, PLAYER_RADIUS, room.iceWalls)) p.y = ny;
+      if (!collidesWithWall(room.map, nx, p.y, PLAYER_RADIUS, room.iceWalls)) p.x = nx;
+      if (!collidesWithWall(room.map, p.x, ny, PLAYER_RADIUS, room.iceWalls)) p.y = ny;
       // Update movement angle based on actual movement direction
       if (len > 0) p.moveAngle = Math.atan2(dy, dx);
     }
@@ -296,7 +347,7 @@ function updateRoom(room) {
     proj.x += proj.vx * dt;
     proj.y += proj.vy * dt;
     if (now - proj.born > proj.lifetime) { delProj.push(id); continue; }
-    if (collidesWithWall(proj.x, proj.y, PROJECTILE_RADIUS, room.iceWalls)) {
+    if (collidesWithWall(room.map, proj.x, proj.y, PROJECTILE_RADIUS, room.iceWalls)) {
       // Acid flask creates puddle on wall hit
       if (proj.type === "acid_flask") {
         room.puddles.push({ x: proj.x, y: proj.y, radius: 40, dmg: proj.puddleDmg, ownerId: proj.ownerId, expires: now + proj.puddleDuration, lastTick: now });
@@ -433,9 +484,16 @@ function killPlayer(room, player, killerId) {
     if (sock) sock.emit("kill", { killerId, victimId: player.id, respawnTime: RESPAWN_TIME });
   }
 
+  // Win condition: first player to the kill limit ends the match
+  if (killer && killer.kills >= KILL_LIMIT && !room.gameOver) {
+    endMatch(room, killer);
+    return;
+  }
+
   setTimeout(() => {
     if (!room.players[player.id]) return; // player left
-    const spawn = getSpawnPoint();
+    if (room.gameOver || !room.started) return; // match ended before respawn
+    const spawn = getSpawnPoint(room.map);
     player.x = spawn.x; player.y = spawn.y;
     player.hp = PLAYER_MAX_HP; player.alive = true;
     player.burning = false; player.rooted = false;
@@ -444,6 +502,33 @@ function killPlayer(room, player, killerId) {
     player.spawnProtectionEnd = Date.now() + SPAWN_PROTECTION_TIME;
     player.waitingClassChange = false;
   }, RESPAWN_TIME);
+}
+
+function endMatch(room, winner) {
+  room.gameOver = true;
+
+  // Stop the simulation loop
+  if (room.interval) {
+    clearInterval(room.interval);
+    room.interval = null;
+  }
+
+  // Final scoreboard sorted by kills
+  const scores = Object.values(room.players)
+    .map(p => ({ id: p.id, name: p.name, className: p.className, kills: p.kills, deaths: p.deaths }))
+    .sort((a, b) => b.kills - a.kills);
+
+  for (const p of Object.values(room.players)) {
+    const sock = io.sockets.sockets.get(p.socketId);
+    if (sock) sock.emit("matchOver", { winnerId: winner.id, winnerName: winner.name, scores });
+  }
+
+  // Return the room to lobby state so players can rematch
+  room.started = false;
+  for (const p of Object.values(room.players)) {
+    p.alive = false;
+    p.input = null;
+  }
 }
 
 // ─── SOCKET HANDLERS ─────────────────────────────────────────

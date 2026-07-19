@@ -17,10 +17,12 @@ class GameScene extends Phaser.Scene {
   init(data) {
     this.socket = data.socket;
     this.mapData = data.map;
+    this.mapName = data.mapName || "";
     this.tileSize = data.tileSize;
     this.myId = data.myId;
     this.myClass = data.className;
     this.serverPlayers = data.players;
+    this.killLimit = data.killLimit || 10;
   }
 
   create() {
@@ -114,11 +116,28 @@ class GameScene extends Phaser.Scene {
     this.lastDashTime = 0;
 
     // ─── SOCKET EVENTS ──────────────────────────────────
+    // Clear old listeners first so a rematch does not stack duplicates
+    ["state", "hit", "kill", "slashEffect", "muzzleFlash", "matchOver", "gameStart"].forEach(e => this.socket.off(e));
+    this.matchEnded = false;
     this.socket.on("state", (state) => this.onState(state));
     this.socket.on("hit", (data) => this.onHit(data));
     this.socket.on("kill", (data) => this.onKill(data));
     this.socket.on("slashEffect", (data) => this.onSlashEffect(data));
     this.socket.on("muzzleFlash", (data) => this.onMuzzleFlash(data));
+    this.socket.on("matchOver", (data) => this.onMatchOver(data));
+    this.socket.on("gameStart", (data) => {
+      // Rematch: restart the scene with fresh match data
+      this.scene.restart({
+        socket: this.socket,
+        map: data.map,
+        mapName: data.mapName,
+        tileSize: data.tileSize,
+        killLimit: data.killLimit,
+        myId: data.myId,
+        players: data.players,
+        className: this.myClass,
+      });
+    });
 
     // Init lerp
     for (const [id, p] of Object.entries(this.serverPlayers)) {
@@ -147,6 +166,7 @@ class GameScene extends Phaser.Scene {
   // ─── STATE UPDATE ──────────────────────────────────────
 
   onState(state) {
+    if (this.matchEnded) return;
     // ── Players ──
     const seenIds = new Set();
     for (const [id, p] of Object.entries(state.players)) {
@@ -229,8 +249,8 @@ class GameScene extends Phaser.Scene {
     if (myData) {
       const sprintLabel = myData.sprinting ? " [SPRINT]" : "";
       const shieldLabel = myData.spawnProtection ? " [SHIELD]" : "";
-      this.hud.setText(`HP: ${myData.hp}  K: ${myData.kills}  D: ${myData.deaths}  ${myData.alive ? "" : "DEAD"}${sprintLabel}${shieldLabel}`);
-      this.classHud.setText(`${myData.className.toUpperCase()}  |  LClick: Shoot  RClick: Special  Space: Dash  Shift: Sprint`);
+      this.hud.setText(`HP: ${myData.hp}  K: ${myData.kills}/${this.killLimit}  D: ${myData.deaths}  ${myData.alive ? "" : "DEAD"}${sprintLabel}${shieldLabel}`);
+      this.classHud.setText(`${myData.className.toUpperCase()}${this.mapName ? " @ " + this.mapName.toUpperCase() : ""}  |  LClick: Shoot  RClick: Special  Space: Dash  Shift: Sprint`);
 
       // Show/hide class picker on death
       if (!myData.alive && !this.isDead) {
@@ -574,6 +594,59 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  // ─── MATCH OVER ──────────────────────────────────
+
+  onMatchOver(data) {
+    this.matchEnded = true;
+    this.holdingFire = false;
+    this.hideDeathClassPicker();
+
+    const cx = this.cameras.main.width / 2;
+    const cy = this.cameras.main.height / 2;
+
+    const overlay = this.add.container(cx, cy).setScrollFactor(0).setDepth(500);
+    const bg = this.add.rectangle(0, 0, 520, 380, 0x000000, 0.9).setStrokeStyle(3, 0xffd54f);
+    overlay.add(bg);
+
+    const iWon = data.winnerId === this.myId;
+    const title = this.add.text(0, -150, iWon ? "VICTORY!" : `${data.winnerName} WINS!`, {
+      fontSize: "36px", fontFamily: "monospace", fill: iWon ? "#ffd54f" : "#ff6666",
+      stroke: "#000000", strokeThickness: 5,
+    }).setOrigin(0.5);
+    overlay.add(title);
+
+    // Scoreboard
+    const header = this.add.text(0, -100, "NAME            CLASS        K   D", {
+      fontSize: "14px", fontFamily: "monospace", fill: "#aaaaaa",
+    }).setOrigin(0.5, 0);
+    overlay.add(header);
+
+    const lines = data.scores.map((s, i) => {
+      const marker = s.id === this.myId ? "> " : "  ";
+      return `${marker}${s.name.padEnd(14)}${s.className.padEnd(13)}${String(s.kills).padStart(2)}  ${String(s.deaths).padStart(2)}`;
+    }).join("\n");
+    const board = this.add.text(0, -75, lines, {
+      fontSize: "14px", fontFamily: "monospace", fill: "#ffffff", lineSpacing: 6,
+    }).setOrigin(0.5, 0);
+    overlay.add(board);
+
+    // Rematch button (any player can press it, same as lobby start)
+    const btnBg = this.add.rectangle(0, 130, 220, 46, 0x1a1a2e).setStrokeStyle(2, 0x4caf50).setInteractive({ useHandCursor: true });
+    const btnLabel = this.add.text(0, 130, "[ REMATCH ]", {
+      fontSize: "20px", fontFamily: "monospace", fill: "#4caf50",
+    }).setOrigin(0.5);
+    btnBg.on("pointerover", () => btnBg.setFillStyle(0x2a2a3e));
+    btnBg.on("pointerout", () => btnBg.setFillStyle(0x1a1a2e));
+    btnBg.on("pointerdown", () => {
+      btnLabel.setText("WAITING...");
+      this.socket.emit("startGame");
+    });
+    overlay.add(btnBg);
+    overlay.add(btnLabel);
+
+    this.matchOverOverlay = overlay;
+  }
+
   updateKillFeed() {
     const now = Date.now();
     this.killFeed = this.killFeed.filter(k => now - k.time < 4000);
@@ -584,6 +657,7 @@ class GameScene extends Phaser.Scene {
 
   update(time, delta) {
     if (!this.socket) return;
+    if (this.matchEnded) return;
 
     // ── Interpolate remote players ──
     const lerpFactor = 0.3;
