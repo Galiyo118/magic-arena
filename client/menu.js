@@ -192,7 +192,7 @@ class MenuScene extends Phaser.Scene {
     });
 
     // Controls hint
-    this.add.text(cx, this.cameras.main.height - 30, "WASD move | Click shoot | Right-click special | Space dash | Shift sprint", {
+    this.add.text(cx, this.cameras.main.height - 30, "WASD move | Click shoot | Right-click special | Space dash | Shift sprint | Tab scores | M mute", {
       fontSize: "11px", fontFamily: "monospace", fill: "#555555",
     }).setOrigin(0.5);
   }

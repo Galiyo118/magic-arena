@@ -10,7 +10,7 @@ const io = new Server(server, {
   pingInterval: 5000,
   pingTimeout: 10000,
 });
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(compression());
 app.use(express.static(path.join(__dirname, "..", "client"), { maxAge: "1h" }));

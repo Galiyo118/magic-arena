@@ -27,6 +27,7 @@ class GameScene extends Phaser.Scene {
 
   create() {
     generateSprites(this);
+    SFX.init();
 
     this.playerSprites = {};
     this.projectileSprites = {};
@@ -43,7 +44,10 @@ class GameScene extends Phaser.Scene {
       d: Phaser.Input.Keyboard.KeyCodes.D,
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      tab: Phaser.Input.Keyboard.KeyCodes.TAB,
+      m: Phaser.Input.Keyboard.KeyCodes.M,
     });
+    this.input.keyboard.addCapture("TAB");
     this.spaceJustPressed = false;
     this.holdingFire = false;
     this.lastFireTime = 0;
@@ -52,6 +56,7 @@ class GameScene extends Phaser.Scene {
 
     // Auto-fire on hold
     this.input.on("pointerdown", (pointer) => {
+      SFX.resume();
       if (pointer.leftButtonDown()) this.holdingFire = true;
       if (pointer.rightButtonDown()) {
         const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
@@ -60,6 +65,7 @@ class GameScene extends Phaser.Scene {
         const angle = Math.atan2(worldPoint.y - me.y, worldPoint.x - me.x);
         this.socket.emit("special", { angle });
         this.lastSpecialTime = Date.now();
+        SFX.special();
       }
     });
     this.input.on("pointerup", (pointer) => {
@@ -109,6 +115,19 @@ class GameScene extends Phaser.Scene {
       fontSize: "11px", fill: "#ff6666", fontFamily: "monospace",
       backgroundColor: "#000000aa", padding: { x: 6, y: 3 },
     }).setScrollFactor(0).setDepth(200).setOrigin(1, 0);
+
+    // Mute indicator
+    this.muteText = this.add.text(this.cameras.main.width - 10, this.cameras.main.height - 20, "", {
+      fontSize: "10px", fill: "#888888", fontFamily: "monospace",
+    }).setScrollFactor(0).setDepth(200).setOrigin(1, 0);
+
+    // Tab scoreboard (hidden until Tab held)
+    const sbX = this.cameras.main.width / 2;
+    this.scoreboardBg = this.add.rectangle(sbX, 200, 420, 240, 0x000000, 0.85)
+      .setStrokeStyle(2, 0x4fc3f7).setScrollFactor(0).setDepth(400).setVisible(false);
+    this.scoreboardText = this.add.text(sbX, 200, "", {
+      fontSize: "13px", fontFamily: "monospace", fill: "#ffffff", lineSpacing: 8, align: "left",
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(401).setVisible(false);
 
     // Track cooldowns locally
     this.lastShootTime = 0;
@@ -246,11 +265,25 @@ class GameScene extends Phaser.Scene {
 
     // ── HUD ──
     const myData = state.players[this.myId];
+
+    // Tab scoreboard content
+    if (this.keys.tab.isDown) {
+      const rows = Object.entries(state.players)
+        .map(([id, p]) => ({ id, name: p.name || id.slice(0, 6), className: p.className, kills: p.kills, deaths: p.deaths }))
+        .sort((x, y) => y.kills - x.kills);
+      const lines = ["NAME           CLASS         K   D", ""];
+      for (const r of rows) {
+        const marker = r.id === this.myId ? "> " : "  ";
+        lines.push(`${marker}${r.name.padEnd(13)}${r.className.padEnd(13)}${String(r.kills).padStart(2)}  ${String(r.deaths).padStart(2)}`);
+      }
+      this.scoreboardText.setText(lines.join("\n"));
+    }
+
     if (myData) {
       const sprintLabel = myData.sprinting ? " [SPRINT]" : "";
       const shieldLabel = myData.spawnProtection ? " [SHIELD]" : "";
       this.hud.setText(`HP: ${myData.hp}  K: ${myData.kills}/${this.killLimit}  D: ${myData.deaths}  ${myData.alive ? "" : "DEAD"}${sprintLabel}${shieldLabel}`);
-      this.classHud.setText(`${myData.className.toUpperCase()}${this.mapName ? " @ " + this.mapName.toUpperCase() : ""}  |  LClick: Shoot  RClick: Special  Space: Dash  Shift: Sprint`);
+      this.classHud.setText(`${myData.className.toUpperCase()}${this.mapName ? " @ " + this.mapName.toUpperCase() : ""}  |  LClick: Shoot  RClick: Special  Space: Dash  Shift: Sprint  Tab: Scores  M: Mute`);
 
       // Show/hide class picker on death
       if (!myData.alive && !this.isDead) {
@@ -416,6 +449,7 @@ class GameScene extends Phaser.Scene {
       // Red flash on screen edge
       this.cameras.main.flash(80, 255, 0, 0, false, null, null, 0.15);
     }
+    SFX.hit();
     this.spawnParticles(data.x, data.y, 0xff4400, 8);
     // Floating damage number
     this.spawnDmgNumber(data.x, data.y, data.dmg);
@@ -425,8 +459,10 @@ class GameScene extends Phaser.Scene {
     if (data.victimId === this.myId) {
       this.cameras.main.shake(250, 0.02);
       this.cameras.main.flash(300, 255, 0, 0, false, null, null, 0.3);
+      SFX.death();
     }
     if (data.killerId === this.myId && data.victimId !== this.myId) {
+      SFX.kill();
       // Siphon heal feedback
       this.spawnHealNumber(this.lerpPlayers[this.myId]?.x || 0, this.lerpPlayers[this.myId]?.y || 0);
     }
@@ -466,6 +502,7 @@ class GameScene extends Phaser.Scene {
 
   onMuzzleFlash(data) {
     const color = FLASH_COLORS[data.type] || 0xffffff;
+    if (data.shooterId === this.myId) SFX.shoot(data.type);
     const gfx = this.add.graphics().setDepth(12);
     // Bright flash circle
     gfx.fillStyle(0xffffff, 0.8);
@@ -601,6 +638,9 @@ class GameScene extends Phaser.Scene {
     this.holdingFire = false;
     this.hideDeathClassPicker();
 
+    if (data.winnerId === this.myId) SFX.victory();
+    else SFX.defeat();
+
     const cx = this.cameras.main.width / 2;
     const cy = this.cameras.main.height / 2;
 
@@ -697,8 +737,19 @@ class GameScene extends Phaser.Scene {
       this.socket.emit("dash");
       this.lastDashTime = Date.now();
       this.spaceJustPressed = true;
+      SFX.dash();
     }
     if (this.keys.space.isUp) this.spaceJustPressed = false;
+
+    // Mute toggle
+    if (Phaser.Input.Keyboard.JustDown(this.keys.m)) {
+      const muted = SFX.toggleMute();
+      this.muteText.setText(muted ? "MUTED (M)" : "");
+    }
+
+    // Tab scoreboard
+    this.scoreboardBg.setVisible(this.keys.tab.isDown);
+    this.scoreboardText.setVisible(this.keys.tab.isDown);
 
     // ── Cooldown bars ──
     const now = Date.now();

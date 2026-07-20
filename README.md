@@ -4,7 +4,7 @@ A 2D top-down multiplayer wizard PvP game that runs entirely in the browser. Pic
 
 Built with Phaser 3 on the client and Node.js with Socket.IO on the server. The server owns the whole simulation, so there is no client side cheating: clients only send input and render what the server tells them.
 
-![Gameplay](docs/gameplay.png)
+![Gameplay](docs/gameplay.gif)
 
 ## Quick start
 
@@ -38,6 +38,8 @@ Open http://localhost:3000 in two browser tabs (or send the room code to a frien
 | Right click | Special ability                 |
 | Space       | Dash                            |
 | Shift       | Sprint                          |
+| Tab (hold)  | Live scoreboard                 |
+| M           | Mute sound                      |
 
 ## Classes
 
@@ -55,6 +57,8 @@ Other mechanics: killing someone heals you 25 HP, everyone slowly regenerates, f
 
 ![Match over](docs/match_over.png)
 
+![Gameplay screenshot](docs/gameplay.png)
+
 ## Project structure
 
 ```
@@ -67,6 +71,7 @@ magic-arena/
     ├── main.js      Phaser config
     ├── menu.js      Menu and lobby scene
     ├── scene.js     Game scene: rendering, input, interpolation
+    ├── sfx.js       Sound effects synthesized with WebAudio (no audio files)
     └── sprites.js   Pixel art sprites generated at runtime (no image assets)
 ```
 
@@ -74,7 +79,7 @@ magic-arena/
 
 - **Server authoritative.** The server runs each room's simulation at 60 fps and handles movement, collision, damage, status effects, and win detection. Clients send `{dx, dy, angle, sprint}` input and ability requests, nothing else.
 - **Client interpolation.** Remote players lerp toward their latest server position so movement looks smooth even though state arrives in discrete ticks.
-- **Runtime generated art.** All sprites are drawn to canvases at startup in `sprites.js`. The repo has no image files and no build step.
+- **Runtime generated assets.** All sprites are drawn to canvases at startup in `sprites.js`, and every sound is synthesized with WebAudio in `sfx.js`. The repo has no image or audio files and no build step.
 - **Rooms are isolated.** Each room has its own game loop, map, and state. Empty rooms are cleaned up when the last player disconnects.
 
 ## Tuning
@@ -85,6 +90,18 @@ Game balance lives in two places in `server/index.js`:
 - The constants above it (`KILL_LIMIT`, `RESPAWN_TIME`, `SIPHON_HEAL`, `PASSIVE_REGEN`, and so on) control match rules.
 
 Maps are plain string arrays in the `MAPS` object. `#` is a wall, `.` is floor, each cell is 64 pixels. Add a new layout there and it joins the random rotation automatically.
+
+## Deploying
+
+The server reads `PORT` from the environment, so it works out of the box on most Node hosts (Render, Railway, Fly.io, a VPS).
+
+```bash
+# from the repo root
+npm install
+npm start
+```
+
+For Render or Railway: point the service at the repo, build command `npm install`, start command `npm start`. Once deployed, everyone with the URL can play together with room codes. WebSockets must be enabled on the host (they are by default on Render and Railway).
 
 ## License
 
