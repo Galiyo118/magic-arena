@@ -2,6 +2,8 @@
 
 A 2D top-down multiplayer wizard PvP game that runs entirely in the browser. Pick one of five spell classes, create a room, share the four letter code with friends, and fight until someone reaches 10 kills.
 
+**Play it now: https://magic-arena-production.up.railway.app**
+
 Built with Phaser 3 on the client and Node.js with Socket.IO on the server. The server owns the whole simulation, so there is no client side cheating: clients only send input and render what the server tells them.
 
 ![Gameplay](docs/gameplay.gif)
@@ -102,6 +104,8 @@ npm start
 ```
 
 For Render or Railway: point the service at the repo, build command `npm install`, start command `npm start`. Once deployed, everyone with the URL can play together with room codes. WebSockets must be enabled on the host (they are by default on Render and Railway).
+
+The live demo above runs on Railway from this exact repo.
 
 ## License
 
